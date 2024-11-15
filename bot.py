@@ -1,8 +1,14 @@
+# Logging para registro de eventos y errores
 import logging
+
+# Traductor de Google para traducción entre idiomas
 from deep_translator import GoogleTranslator
-import pandas as pd
+
+# Generador de palabras aleatorias en inglés
 from random_word import RandomWords
-from telegram import ForceReply, Update, InlineKeyboardButton, InlineKeyboardMarkup
+
+# Componentes principales de Telegram Bot
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -11,8 +17,23 @@ from telegram.ext import (
     filters,
     CallbackQueryHandler,
 )
+
+# Para operaciones asíncronas
 import asyncio
-from Telegram_Token import PERSONAL_TOKEN
+
+# Motor de texto a voz
+import edge_tts
+
+# Manejo de archivos
+import os
+
+# Cargar el token de telegram desde el archivo .env
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Acceder a la variable de entorno
+PERSONAL_TOKEN = os.getenv("PERSONAL_TOKEN")
 
 
 # Crear un objetos traductor
@@ -195,7 +216,7 @@ async def traductions(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 async def random_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Genera y traduce una palabra aleatoria según la configuración actual"""
 
-    # Validar configuraci��n
+    # Validar configuración
     if await validate_config(update, context):
         return
 
@@ -234,22 +255,29 @@ async def random_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await message.reply_text(
                     f"🇨🇴 {es_word}\n🇺🇸 {word}", reply_markup=reply_markup
                 )
+                # Enviar audio solo en el idioma de destino
+                await send_audio_message(update, word, "en")
             else:  # destiny_lang == "de"
                 de_word = translatorEnDe.translate(word)
                 await message.reply_text(
                     f"🇨🇴 {es_word}\n🇩🇪 {de_word}", reply_markup=reply_markup
                 )
+                await send_audio_message(update, de_word, "de")
+
         elif origin_lang == "en":
             if destiny_lang == "es":
                 es_word = translatorEnEs.translate(word)
                 await message.reply_text(
                     f"🇺🇸 {word}\n🇨🇴 {es_word}", reply_markup=reply_markup
                 )
+                await send_audio_message(update, es_word, "es")
             else:  # destiny_lang == "de"
                 de_word = translatorEnDe.translate(word)
                 await message.reply_text(
                     f"🇺🇸 {word}\n🇩🇪 {de_word}", reply_markup=reply_markup
                 )
+                await send_audio_message(update, de_word, "de")
+
         else:  # origin_lang == "de"
             de_word = translatorEnDe.translate(word)
             if destiny_lang == "es":
@@ -257,28 +285,39 @@ async def random_word(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
                 await message.reply_text(
                     f"🇩🇪 {de_word}\n🇨🇴 {es_word}", reply_markup=reply_markup
                 )
+                await send_audio_message(update, es_word, "es")
             else:  # destiny_lang == "en"
                 await message.reply_text(
                     f"🇩🇪 {de_word}\n🇺🇸 {word}", reply_markup=reply_markup
                 )
+                await send_audio_message(update, word, "en")
+
     else:  # type_translation == "Simultaneous"
         # 6. Para traducción simultánea, obtener todas las traducciones
         es_word = translatorEnEs.translate(word)
         de_word = translatorEnDe.translate(word)
 
-        # 7. Mostrar según idioma de origen
+        # 7. Mostrar según idioma de origen y enviar audios en los otros dos idiomas
         if origin_lang == "es":
             await message.reply_text(
                 f"🇨🇴 {es_word}\n🇺🇸 {word}\n🇩🇪 {de_word}", reply_markup=reply_markup
             )
+            await send_audio_message(update, word, "en")
+            await send_audio_message(update, de_word, "de")
+
         elif origin_lang == "en":
             await message.reply_text(
                 f"🇺🇸 {word}\n🇨🇴 {es_word}\n🇩🇪 {de_word}", reply_markup=reply_markup
             )
+            await send_audio_message(update, es_word, "es")
+            await send_audio_message(update, de_word, "de")
+
         else:  # origin_lang == "de"
             await message.reply_text(
                 f"🇩🇪 {de_word}\n🇨🇴 {es_word}\n🇺🇸 {word}", reply_markup=reply_markup
             )
+            await send_audio_message(update, es_word, "es")
+            await send_audio_message(update, word, "en")
 
 
 async def show_glossary(
@@ -417,6 +456,18 @@ async def change_type_translation(
 ) -> None:
     """Comando para cambiar el tipo de traducción"""
 
+    # Verificar idioma de origen
+    if not origin_lang:
+        await update.message.reply_text(
+            "🇨🇴 ❌ No has seleccionado el idioma de origen.\n"
+            "📝 Usa el comando /changeorigin para configurarlo.\n\n"
+            "🇺🇸 ❌ You haven't selected the source language.\n"
+            "📝 Use the /changeorigin command to set it.\n\n"
+            "🇩🇪 ❌ Sie haben keine Ausgangssprache ausgewählt.\n"
+            "📝 Verwenden Sie den Befehl /changeorigin, um sie einzustellen."
+        )
+        return
+
     if origin_lang == "es":
         msg = "🇨🇴 Selecciona el tipo de traducción:"
         keyboard = [
@@ -506,45 +557,65 @@ async def echo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if new_entry not in existing_entries:
         glosary += f"{new_entry}\n"
 
-    # Muestra un eco segun el idioma de origen, destino y tipo de traducción, usando el traductor correspondiente
+    # Muestra un eco segun el idioma de origen, destino y tipo de traducción
     if type_translation == "Individual":
         if origin_lang == "es" and destiny_lang == "en":
-            await update.message.reply_text(
-                f"🇨🇴 {update.message.text}\n🇺🇸 {translatorEsEn.translate(update.message.text)}"
-            )
+            text_en = translatorEsEn.translate(update.message.text)
+            await update.message.reply_text(f"🇨🇴 {update.message.text}\n🇺🇸 {text_en}")
+            await send_audio_message(update, text_en, "en")
+
         elif origin_lang == "es" and destiny_lang == "de":
-            await update.message.reply_text(
-                f"🇨🇴 {update.message.text}\n🇩🇪 {translatorEsDe.translate(update.message.text)}"
-            )
+            text_de = translatorEsDe.translate(update.message.text)
+            await update.message.reply_text(f"🇨🇴 {update.message.text}\n🇩🇪 {text_de}")
+            await send_audio_message(update, text_de, "de")
+
         elif origin_lang == "en" and destiny_lang == "es":
-            await update.message.reply_text(
-                f"🇺🇸 {update.message.text}\n🇨🇴 {translatorEnEs.translate(update.message.text)}"
-            )
+            text_es = translatorEnEs.translate(update.message.text)
+            await update.message.reply_text(f"🇺🇸 {update.message.text}\n🇨🇴 {text_es}")
+            await send_audio_message(update, text_es, "es")
+
         elif origin_lang == "en" and destiny_lang == "de":
-            await update.message.reply_text(
-                f"🇺🇸 {update.message.text}\n🇩🇪 {translatorEnDe.translate(update.message.text)}"
-            )
+            text_de = translatorEnDe.translate(update.message.text)
+            await update.message.reply_text(f"🇺🇸 {update.message.text}\n🇩🇪 {text_de}")
+            await send_audio_message(update, text_de, "de")
+
         elif origin_lang == "de" and destiny_lang == "es":
-            await update.message.reply_text(
-                f"🇩🇪 {update.message.text}\n🇨🇴 {translatorDeEs.translate(update.message.text)}"
-            )
+            text_es = translatorDeEs.translate(update.message.text)
+            await update.message.reply_text(f"🇩🇪 {update.message.text}\n🇨🇴 {text_es}")
+            await send_audio_message(update, text_es, "es")
+
         elif origin_lang == "de" and destiny_lang == "en":
-            await update.message.reply_text(
-                f"🇩🇪 {update.message.text}\n🇺🇸 {translatorDeEn.translate(update.message.text)}"
-            )
+            text_en = translatorDeEn.translate(update.message.text)
+            await update.message.reply_text(f"🇩🇪 {update.message.text}\n🇺🇸 {text_en}")
+            await send_audio_message(update, text_en, "en")
+
     elif type_translation == "Simultaneous":
         if origin_lang == "es":
+            text_en = translatorEsEn.translate(update.message.text)
+            text_de = translatorEsDe.translate(update.message.text)
             await update.message.reply_text(
-                f"🇨🇴 {update.message.text}\n🇺🇸 {translatorEsEn.translate(update.message.text)}\n🇩🇪 {translatorEsDe.translate(update.message.text)}"
+                f"🇨🇴 {update.message.text}\n🇺🇸 {text_en}\n🇩🇪 {text_de}"
             )
+            await send_audio_message(update, text_en, "en")
+            await send_audio_message(update, text_de, "de")
+
         elif origin_lang == "en":
+            text_es = translatorEnEs.translate(update.message.text)
+            text_de = translatorEnDe.translate(update.message.text)
             await update.message.reply_text(
-                f"🇺🇸 {update.message.text}\n🇨🇴 {translatorEnEs.translate(update.message.text)}\n🇩🇪 {translatorEnDe.translate(update.message.text)}"
+                f"🇺🇸 {update.message.text}\n🇨🇴 {text_es}\n🇩🇪 {text_de}"
             )
+            await send_audio_message(update, text_es, "es")
+            await send_audio_message(update, text_de, "de")
+
         elif origin_lang == "de":
+            text_es = translatorDeEs.translate(update.message.text)
+            text_en = translatorDeEn.translate(update.message.text)
             await update.message.reply_text(
-                f"🇩🇪 {update.message.text}\n🇨🇴 {translatorDeEs.translate(update.message.text)}\n🇺🇸 {translatorDeEn.translate(update.message.text)}"
+                f"🇩🇪 {update.message.text}\n🇨🇴 {text_es}\n🇺🇸 {text_en}"
             )
+            await send_audio_message(update, text_es, "es")
+            await send_audio_message(update, text_en, "en")
 
 
 async def origin_lang_callback(
@@ -766,6 +837,50 @@ async def menu_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         current_lang = origin_lang if origin_lang else "en"
         await query.message.reply_text(error_messages[current_lang])
         logging.error(f"Error in menu_callback: {str(e)}")
+
+
+async def send_audio_message(update: Update, text: str, lang: str) -> None:
+    """
+    Genera y envía un mensaje de audio usando edge-tts.
+
+    Args:
+        update (Update): Objeto Update de Telegram
+        text (str): Texto a convertir en audio
+        lang (str): Código del idioma ('es', 'en', 'de')
+    """
+    # Obtener el objeto message correcto según el tipo de update
+    message = update.message if update.message else update.callback_query.message
+
+    # Mapeo de idiomas a voces y etiquetas
+    VOICE_CONFIG = {
+        "es": {"voice": "es-ES-AlvaroNeural", "caption": "Español"},
+        "en": {"voice": "en-US-ChristopherNeural", "caption": "English"},
+        "de": {"voice": "de-DE-ConradNeural", "caption": "Deutsch"},
+    }
+
+    try:
+        # Generar nombre único para el archivo de audio
+        audio_file = f"({VOICE_CONFIG[lang]['caption']}) {text}.mp3"
+
+        # Crear y guardar el audio
+        communicate = edge_tts.Communicate(text, VOICE_CONFIG[lang]["voice"])
+        await communicate.save(audio_file)
+
+        # Enviar el audio usando el objeto message correcto
+        await message.reply_audio(audio=open(audio_file, "rb"))
+
+        # Limpiar el archivo temporal
+        os.remove(audio_file)
+
+    except Exception as e:
+        logging.error(f"Error generando audio para {lang}: {str(e)}")
+        error_messages = {
+            "es": "❌ Error al generar el audio",
+            "en": "❌ Error generating audio",
+            "de": "❌ Fehler bei der Audiogenerierung",
+        }
+        # Usar el objeto message correcto para enviar el error
+        await message.reply_text(error_messages.get(lang, "❌ Error"))
 
 
 def main() -> None:
